@@ -14,6 +14,12 @@ from pykka.typing import proxy_method
 from mopidy import exceptions
 from mopidy.core import _validation as validation
 from mopidy.models import Image, Ref, SearchResult, Track
+from mopidy.query import (
+    SearchExpr,
+    from_dict,
+    is_search_expr,
+    is_serialized_expr,
+)
 from mopidy.types import DistinctField, Query, SearchField, Uri, UriScheme
 
 if TYPE_CHECKING:
@@ -356,6 +362,76 @@ class LibraryController:
 
         return results
 
+    def search_with_expr(
+        self,
+        expr: SearchExpr | Mapping[str, object],
+        uris: Iterable[Uri] | None = None,
+        *,
+        fields: Iterable[DistinctField] | None = None,
+        limit: bool = True,
+    ) -> list[SearchResult]:
+        """Search the library using a [SearchExpr][mopidy.query.SearchExpr].
+
+        Unlike [search][], this accepts a structured expression tree (or its
+        JSON-RPC serialized form from [to_dict][mopidy.query.to_dict]). Legacy
+        field→values dicts are not accepted.
+
+        Backends that do not implement
+        [LibraryProvider.search_with_expr][mopidy.backend.LibraryProvider.search_with_expr]
+        are skipped. Results are not merged.
+
+        If `uris` is given, the search is limited to those URI roots.
+
+        Args:
+            expr: A search expression, or a serialized mapping.
+            uris: Zero or more URI roots to limit the search to.
+            fields: Request distinct tuples of these fields. Results contain
+                minimal tracks with only the requested fields populated.
+            limit: Whether backends should apply their configured search-result
+                limits.
+        """
+        expr = _coerce_search_expr(expr)
+        validation.check_search_expr(expr)
+        if uris is not None:
+            validation.check_uris(uris)
+        validation.check_boolean(limit)
+        if fields is not None:
+            fields = tuple(fields)
+            validation.check_instances(fields, str)
+            for field in fields:
+                validation.check_choice(field, validation.DISTINCT_FIELDS.keys())
+
+        futures = {}
+        for backend, backend_uris in self._get_backends_to_uris(uris).items():
+            kwargs: dict[str, object] = {"expr": expr, "uris": backend_uris}
+            if fields is not None:
+                kwargs["fields"] = fields
+            if not limit:
+                kwargs["limit"] = False
+            futures[backend] = backend.library.search_with_expr(**kwargs)
+
+        reraise = (LookupError,)
+        results = []
+        for backend, future in futures.items():
+            with _backend_error_handling(backend, reraise=reraise):
+                result = future.get()
+                if result is not None:
+                    validation.check_instance(result, SearchResult)
+                    results.append(result)
+        return results
+
+
+def _coerce_search_expr(expr: SearchExpr | Mapping[str, object]) -> SearchExpr:
+    if is_search_expr(expr):
+        return expr
+    if not isinstance(expr, Mapping) or not is_serialized_expr(expr):
+        msg = f"Expected a SearchExpr or serialized expression, not {expr!r}"
+        raise exceptions.ValidationError(msg)
+    try:
+        return from_dict(expr)
+    except ValueError as exc:
+        raise exceptions.ValidationError(str(exc)) from exc
+
 
 def _normalize_query(query: Query[SearchField]) -> Query[SearchField]:
     broken_client = False
@@ -387,3 +463,4 @@ class LibraryControllerProxy:
     lookup = proxy_method(LibraryController.lookup)
     refresh = proxy_method(LibraryController.refresh)
     search = proxy_method(LibraryController.search)
+    search_with_expr = proxy_method(LibraryController.search_with_expr)

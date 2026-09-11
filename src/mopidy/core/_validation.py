@@ -6,6 +6,7 @@ from types import UnionType
 from typing import Any, Literal, Union, get_args
 
 from mopidy import exceptions
+from mopidy.query import And, Compare, MatchAll, Not, is_search_expr
 from mopidy.types import (
     DistinctField,
     PlaybackState,
@@ -135,6 +136,34 @@ def check_integer(
     if max is not None and arg > max:
         msg = f"Expected number smaller or equal to {max}, not {arg!r}"
         raise exceptions.ValidationError(msg)
+
+
+def check_search_expr(expr: object) -> None:
+    """Validate a [SearchExpr][mopidy.query.SearchExpr] tree."""
+    if not is_search_expr(expr):
+        msg = f"Expected a SearchExpr, not {expr!r}"
+        raise exceptions.ValidationError(msg)
+    if isinstance(expr, MatchAll):
+        return
+    if isinstance(expr, Compare):
+        check_choice(
+            expr.field,
+            SEARCH_FIELDS.keys(),
+            msg="Expected query field to be one of {choices}, not {arg!r}",
+        )
+        if not isinstance(expr.value, str):
+            msg = f'Expected "{expr.field}" to be a string, not {expr.value!r}'
+            raise exceptions.ValidationError(msg)
+        return
+    if isinstance(expr, Not):
+        check_search_expr(expr.expr)
+        return
+    if isinstance(expr, And):
+        if not expr.exprs:
+            msg = "and must be a non-empty list"
+            raise exceptions.ValidationError(msg)
+        for sub in expr.exprs:
+            check_search_expr(sub)
 
 
 def check_query(

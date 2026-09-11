@@ -56,6 +56,12 @@ class DummyLibraryProvider(backend.LibraryProvider):
             return self.dummy_find_exact_result
         return self.dummy_search_result
 
+    def search_with_expr(self, expr, uris=None, *, fields=None, limit=True):
+        from mopidy.query import matches
+
+        tracks = [t for t in self.dummy_library if matches(expr, t)]
+        return SearchResult(tracks=tuple(tracks))
+
 
 class DummyPlaybackProvider(backend.PlaybackProvider):
     def __init__(self, *args, **kwargs):

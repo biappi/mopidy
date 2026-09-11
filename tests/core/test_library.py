@@ -3,7 +3,7 @@ from unittest import mock
 
 import pytest
 
-from mopidy import backend, core
+from mopidy import backend, core, exceptions
 from mopidy.core import _validation as validation
 from mopidy.models import Image, Ref, SearchResult, Track
 
@@ -345,6 +345,125 @@ class CoreLibraryTest(BaseCoreLibraryTest):
             uris=None,
             exact=False,
         )
+        assert not self.library1.search_with_expr.called
+
+
+class CoreLibrarySearchWithExprTest(BaseCoreLibraryTest):
+    def test_combines_results_from_all_backends(self):
+        from mopidy.query import Compare
+
+        track1 = Track(uri="dummy1:a")
+        track2 = Track(uri="dummy2:a")
+        result1 = SearchResult(tracks=[track1])
+        result2 = SearchResult(tracks=[track2])
+        expr = Compare("any", "contains", "a")
+
+        self.library1.search_with_expr.return_value.get.return_value = result1
+        self.library2.search_with_expr.return_value.get.return_value = result2
+
+        result = self.core.library.search_with_expr(expr)
+
+        assert result1 in result
+        assert result2 in result
+        self.library1.search_with_expr.assert_called_once_with(
+            expr=expr,
+            uris=None,
+        )
+        self.library2.search_with_expr.assert_called_once_with(
+            expr=expr,
+            uris=None,
+        )
+        assert not self.library1.search.called
+        assert not self.library2.search.called
+
+    def test_skips_none_results(self):
+        from mopidy.query import Compare
+
+        track1 = Track(uri="dummy1:a")
+        result1 = SearchResult(tracks=[track1])
+        expr = Compare("artist", "eq", "ABBA")
+
+        self.library1.search_with_expr.return_value.get.return_value = result1
+        self.library2.search_with_expr.return_value.get.return_value = None
+
+        result = self.core.library.search_with_expr(expr)
+
+        assert result1 in result
+        assert None not in result
+
+    def test_accepts_serialized_expr(self):
+        from mopidy.query import Compare, to_dict
+
+        expr = Compare("album", "eq", "Exciter")
+        result1 = SearchResult(tracks=[Track(uri="dummy1:a")])
+        self.library1.search_with_expr.return_value.get.return_value = result1
+        self.library2.search_with_expr.return_value.get.return_value = None
+
+        result = self.core.library.search_with_expr(to_dict(expr))
+
+        assert result1 in result
+        self.library1.search_with_expr.assert_called_once_with(
+            expr=expr,
+            uris=None,
+        )
+
+    def test_rejects_legacy_query_dict(self):
+        with pytest.raises(exceptions.ValidationError):
+            self.core.library.search_with_expr({"artist": ["ABBA"]})
+
+    def test_with_uris_selects_backend(self):
+        from mopidy.query import Compare
+
+        expr = Compare("any", "contains", "a")
+        self.library1.search_with_expr.return_value.get.return_value = SearchResult()
+        self.core.library.search_with_expr(expr, uris=["dummy1:"])
+        self.library1.search_with_expr.assert_called_once_with(
+            expr=expr,
+            uris=["dummy1:"],
+        )
+        assert not self.library2.search_with_expr.called
+
+    def test_with_fields_requests_distinct_values(self):
+        from mopidy.query import Compare
+
+        expr = Compare("artist", "eq", "ABBA")
+        self.library1.search_with_expr.return_value.get.return_value = SearchResult()
+
+        self.core.library.search_with_expr(expr, fields=("album", "date"))
+
+        self.library1.search_with_expr.assert_called_once_with(
+            expr=expr,
+            uris=None,
+            fields=("album", "date"),
+        )
+        self.library2.search_with_expr.assert_called_once_with(
+            expr=expr,
+            uris=None,
+            fields=("album", "date"),
+        )
+
+    def test_without_limit_requests_all_results(self):
+        from mopidy.query import MatchAll
+
+        expr = MatchAll()
+        self.core.library.search_with_expr(expr, limit=False)
+
+        self.library1.search_with_expr.assert_called_once_with(
+            expr=expr,
+            uris=None,
+            limit=False,
+        )
+        self.library2.search_with_expr.assert_called_once_with(
+            expr=expr,
+            uris=None,
+            limit=False,
+        )
+
+    def test_rejects_unknown_field(self):
+        from mopidy.query import Compare
+
+        with pytest.raises(exceptions.ValidationError):
+            self.core.library.search_with_expr(Compare("not_a_field", "eq", "x"))
 
 
 class GetDistinctTest(BaseCoreLibraryTest):

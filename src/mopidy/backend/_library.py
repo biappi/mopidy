@@ -10,6 +10,7 @@ from pykka.typing import proxy_field, proxy_method
 
 if TYPE_CHECKING:
     from mopidy.models import Image, Ref, SearchResult, Track
+    from mopidy.query import SearchExpr
     from mopidy.types import DistinctField, Query, SearchField, Uri
 
     from ._backend import Backend
@@ -100,6 +101,28 @@ class LibraryProvider:
         """
         return None
 
+    def search_with_expr(
+        self,
+        expr: SearchExpr,
+        uris: Iterable[Uri] | None = None,
+        *,
+        fields: Iterable[DistinctField] | None = None,
+        limit: bool = True,
+    ) -> SearchResult | None:
+        """See [mopidy.core.LibraryController.search_with_expr][].
+
+        *MAY be implemented by subclass.* Backends that do not override this
+        method are skipped by core; the legacy [search][] method is not used
+        as a fallback.
+
+        If `fields` is supplied, return distinct values for those fields as
+        minimal tracks with only those fields populated.
+
+        If `limit` is false, return all matching results instead of applying
+        the backend's configured search-result limit.
+        """
+        return None
+
 
 class LibraryProviderProxy:
     root_directory = proxy_field(LibraryProvider.root_directory)
@@ -110,3 +133,4 @@ class LibraryProviderProxy:
     lookup = proxy_method(LibraryProvider.lookup)
     refresh = proxy_method(LibraryProvider.refresh)
     search = proxy_method(LibraryProvider.search)
+    search_with_expr = proxy_method(LibraryProvider.search_with_expr)
